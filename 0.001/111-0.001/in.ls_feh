@@ -1,0 +1,85 @@
+#拉伸，总应变0.1
+#注：以下参数可更改
+variable s equal 0.1              #总变形
+variable v equal 0.001            #应变速率
+variable n equal 200              #输出总帧数
+variable T equal 300              #运行温度（K） ℃+273
+variable Ox string "1 -1 0"         #x取向
+variable Oy string "1 1 -2"         #y取向
+variable Oz string "1 1 1"         #z取向
+variable bd string "s s s"         #边界条件s s s代表收缩性边界，p p p代表周期性边界 
+
+#以下参数谨慎更改
+variable tstep equal 0.001          #时间步长
+variable runcy equal 30000          #弛豫步
+variable runls equal $s/$v/${tstep} #运行步
+variable step_per_pic equal ${runls}/$n #每多少步输出一帧
+variable l equal 114.6              #单晶尺寸
+variable vz equal $l*$v             #运动速度
+
+#系统设置
+units      metal
+dimension  3
+atom_style atomic 
+boundary   ${bd}  
+timestep ${tstep}
+
+#建立模型
+lattice bcc 2.865 orient x ${Ox} orient y ${Oy} orient z ${Oz}  #此处更改取向
+region box block 0 $l 0 $l 0 $l units box  
+create_box 2 box 
+create_atoms 1 box 
+create_atoms 2 random 1342 666 NULL    #随机散布1%的H原子，即H原子占总原子数1%
+region upper block INF INF INF INF 100 INF  units box 
+region lower block INF INF INF INF INF 14.6 units box 
+region mobile block INF INF INF INF 15 99.4 units box 
+group upper region upper 
+group lower region lower
+group mobile subtract all upper lower 
+group boundary union upper lower
+mass 1 55.845
+mass 2 1.008
+write_data 1.dat
+
+#势函数设置 
+pair_style eam/fs 
+pair_coeff * * feh.eam.fs Fe H 
+
+#能量最小化 
+min_style  cg 
+minimize   1.0e-12 1.0e-12 10000 100000 
+
+#温度初始化
+velocity   mobile create $T 666 dist gaussian 
+velocity  boundary set 0 0 0 
+
+#nve下弛豫
+fix  1 all nvt temp $T $T 0.05   
+thermo     100 
+thermo_style custom step temp etotal pe ke press vol time 
+run        ${runcy} 
+unfix 1 
+
+#输出弛豫后长度
+variable  Ltmp equal lz                                                          
+variable  Lini equal ${Ltmp}                                                     
+print     "Initial Length, Lini: ${Lini}"                                        
+
+#沿z轴拉伸
+fix  1 all nvt temp $T $T 0.05 
+fix 0 boundary setforce 0 0 0 
+velocity lower set 0 0 0 
+velocity upper set 0 0 ${vz} units box 
+
+#设置热力学输出
+thermo_style  custom step lx ly lz press pxx pyy pzz pe temp time                                                   
+
+#输出应力和应变数据
+variable strain equal (lz-v_Lini)/v_Lini 
+variable stress equal -pzz/10000 
+fix 3 all print 100 "${strain} ${stress}" file ls_strain_stress.dat screen no       
+
+#输出设置
+dump 1 all custom ${step_per_pic} ls.xyz id type x y z  #其中ls.xyz是输出文件名
+reset_timestep 0
+run  ${runls}
